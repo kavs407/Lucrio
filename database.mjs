@@ -32,6 +32,14 @@ export function createStore(pool){
  async saveActivation(token,email,expires){await pool.query('INSERT INTO lucrio.activations(token_hash,email,expires_at) VALUES($1,$2,$3)',[token,email,expires])},
  async getActivation(token,now=Date.now()){const r=await pool.query('SELECT email FROM lucrio.activations WHERE token_hash=$1 AND used_at IS NULL AND expires_at>$2',[token,now]);return r.rows[0]?.email},
  async verifyUser(id,email,token){const c=await pool.connect();try{await c.query('BEGIN');const r=await c.query('UPDATE lucrio.activations SET used_at=$1 WHERE token_hash=$2 AND email=$3 AND used_at IS NULL AND expires_at>$1 RETURNING email',[Date.now(),token,email]);if(!r.rows.length)throw Object.assign(Error('Link expirado ou já utilizado.'),{status:403});await c.query('UPDATE lucrio.users SET verified_at=$1 WHERE id=$2',[Date.now(),id]);await c.query('COMMIT')}catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}},
+ async markAccessSent(email,now=Date.now()){await pool.query("UPDATE lucrio.purchases SET email_sent=true WHERE email=$1 AND status='paid' AND access_until>$2",[email,now])},
+ async adminOverview(now=Date.now()){
+ const [summary,users,purchases]=await Promise.all([
+ pool.query("SELECT (SELECT count(*) FROM lucrio.users) AS users,(SELECT count(DISTINCT email) FROM lucrio.purchases WHERE status='paid' AND access_until>$1) AS active,(SELECT count(*) FROM lucrio.purchases WHERE status='revoked') AS revoked,(SELECT count(*) FROM lucrio.purchases WHERE status='paid' AND access_until>$1 AND email_sent=false) AS pending",[now]),
+ pool.query("SELECT u.email,u.created_at,u.verified_at,COALESCE(w.data->'settings'->>'name','') AS business,(SELECT max(p.access_until) FROM lucrio.purchases p WHERE p.email=u.email AND p.status='paid') AS access_until FROM lucrio.users u LEFT JOIN lucrio.workspaces w ON w.user_id=u.id ORDER BY u.created_at DESC LIMIT 100"),
+ pool.query('SELECT order_id,email,status,access_until,email_sent FROM lucrio.purchases ORDER BY access_until DESC LIMIT 100')]);
+ return {summary:summary.rows[0],users:users.rows,purchases:purchases.rows,generatedAt:now};
+ },
  async close(){await pool.end()}
  };
 }

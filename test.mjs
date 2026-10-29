@@ -103,3 +103,23 @@ test('Teste de e-mail fica fechado sem credencial temporária e não concede ace
  const app=createApp(d,{NODE_ENV:'test'});app.listen(0,'127.0.0.1');await once(app,'listening');const host='http://127.0.0.1:'+app.address().port;
  try{const r=await fetch(host+'/api/admin/mail-test',{method:'POST',headers:{Origin:host,'Content-Type':'application/json'},body:JSON.stringify({secret:'bad',to:'attacker@example.test'})});assert.equal(r.status,403);const rows=await e.query('SELECT count(*) AS n FROM lucrio.purchases');assert.equal(Number(rows.rows[0].n),0)}finally{await new Promise(resolve=>app.close(resolve));await d.close()}
 });
+
+test('Admin: confirmação do e-mail do proprietário, clientes bloqueados e dados sem segredos',async()=>{
+ const {tokenHash}=await import('./billing.mjs');const e=await PGlite.create();const d=createStore(adapt(e));await d.migrate();const owner='owner@example.test',client='client@example.test',ot='1'.repeat(64),ct='2'.repeat(64),sent=[];
+ const app=createApp(d,{NODE_ENV:'test',REQUIRE_PURCHASE:'1',ADMIN_EMAIL:owner,sendActivation:async email=>sent.push(email)});app.listen(0,'127.0.0.1');await once(app,'listening');const host='http://127.0.0.1:'+app.address().port;
+ const req=(route,method='GET',data,c,origin=host)=>fetch(host+route,{method,redirect:'manual',headers:{Origin:origin,...(data?{'Content-Type':'application/json'}:{}),...(c?{Cookie:c}:{})},body:data?JSON.stringify(data):undefined});
+ try{
+ assert.equal((await req('/admin')).headers.get('location'),'/login');assert.equal((await req('/api/admin/overview')).status,401);
+ const reg={email:owner,password:'admin-password-long',business:'Lucrio'};assert.equal((await req('/api/auth/register','POST',reg)).status,403);
+ await d.saveActivation(tokenHash(ot),owner,Date.now()+60000);assert.equal((await req('/api/auth/activation','POST',{token:ot})).status,200);
+ assert.equal((await req('/api/auth/register','POST',{...reg,email:client,token:ot})).status,403);
+ const result=await req('/api/auth/register','POST',{...reg,token:ot});assert.equal(result.status,201);const oc=cookie(result);assert.equal((await result.json()).redirect,'/admin');assert.equal((await req('/admin','GET',null,oc)).status,200);assert.equal((await req('/api/workspace','GET',null,oc)).status,200);assert.equal(await d.hasAccess(owner),false);
+ await d.recordPurchase({order:'client-paid',email:client,status:'paid',until:Date.now()+86400000});await d.saveActivation(tokenHash(ct),client,Date.now()+60000);
+ const cr=await req('/api/auth/register','POST',{...reg,email:client,token:ct,admin:true,role:'admin'});assert.equal(cr.status,201);const cc=cookie(cr);assert.equal((await req('/admin','GET',null,cc)).status,403);assert.equal((await req('/api/admin/overview','GET',null,cc)).status,403);assert.equal((await req('/api/admin/resend','POST',{email:client},cc)).status,403);
+ const overview=await req('/api/admin/overview','GET',null,oc);assert.equal(overview.status,200);const data=await overview.json();assert.equal(Number(data.summary.users),2);assert.equal(Number(data.summary.active),1);assert(data.users.some(u=>u.email===client));assert(!JSON.stringify(data).includes('password'));assert(!JSON.stringify(data).includes('token_hash'));assert(!JSON.stringify(data).includes('SECRET'));
+ assert.equal((await req('/api/admin/resend','POST',{email:'unknown@example.test'},oc)).status,409);assert.equal((await req('/api/admin/resend','POST',{email:client},oc,'https://evil.test')).status,403);
+ assert.equal((await req('/api/admin/resend','POST',{email:client},oc)).status,200);assert.deepEqual(sent,[client]);const after=await d.adminOverview();assert.equal(Number(after.summary.pending),0);
+ const login=await req('/api/auth/login','POST',reg);assert.equal(login.status,200);assert.equal((await login.json()).redirect,'/admin');
+ await req('/api/auth/logout','POST',{},oc);assert.equal((await req('/api/admin/overview','GET',null,oc)).status,401);
+ }finally{await new Promise(resolve=>app.close(resolve));await d.close()}
+});
