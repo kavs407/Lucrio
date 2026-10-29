@@ -30,7 +30,7 @@ export async function sendActivation(db,email,config,request=fetch){
  const link=base+'/cadastro#token='+token;
  try{
  if(config.EMAIL_TRANSPORT==='google-apps-script'){
- const payload=JSON.stringify({id:digest(token),to:email,link,issued_at:Date.now()});
+ const payload=JSON.stringify({id:digest(token),to:email,link,issued_at:Date.now(),kind:config.MAIL_KIND==='password-reset'?'password-reset':'activation'});
  const signature=createHmac('sha256',config.GMAIL_RELAY_SECRET).update(payload).digest('hex');
  const r=await request(config.GMAIL_RELAY_URL,{method:'POST',signal:AbortSignal.timeout(20000),headers:{'Content-Type':'application/json'},body:JSON.stringify({payload,signature})});
  const data=await r.json();if(!r.ok||data.ok!==true)throw Error('Envio recusado.');

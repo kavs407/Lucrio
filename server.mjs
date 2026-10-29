@@ -73,7 +73,7 @@ const server=http.createServer(async(req,res)=>{
  if(!allowed('reset-email:'+email,3))return json(res,200,{ok:true});
  if(await db.findUser(email)){
  const resetStore={saveActivation:(token,to)=>db.saveReset(token,to,Date.now()+30*60000)};
- try{if(config.sendReset)await config.sendReset(email,resetStore);else await sendActivation(resetStore,email,config)}catch(e){console.error('Falha no envio da recuperação:',e.code||e.name)}
+ try{if(config.sendReset)await config.sendReset(email,resetStore);else await sendActivation(resetStore,email,{...config,MAIL_KIND:'password-reset'})}catch(e){console.error('Falha no envio da recuperação:',e.code||e.name)}
  }
  return json(res,200,{ok:true});
  }
