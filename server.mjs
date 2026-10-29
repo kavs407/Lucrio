@@ -123,6 +123,19 @@ const server=http.createServer(async(req,res)=>{
  if(route==='/admin'&&!user)return redirect(res,'/login');
  if((route==='/admin'||route.startsWith('/api/admin/'))&&!isAdmin)return json(res,user?403:401,{error:'Acesso exclusivo do administrador.'});
  if(route==='/api/admin/overview'&&req.method==='GET')return json(res,200,{...(await db.adminOverview()),adminEmail:user.email,setup:{emailConfigured:emailConfigured(config),checkoutEnabled:checkoutConfigured(config)}});
+ if(route==='/api/admin/manual-access'&&req.method==='POST'){
+ if(!allowed('manual:'+user.id,30))return json(res,429,{error:'Aguarde antes de adicionar mais acessos.'});
+ const {email:raw,days}=await body(req,1000);const email=String(raw||'').trim().toLowerCase();
+ if(!/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(email)||email.length>254||!Number.isSafeInteger(days)||days<1||days>3650)return json(res,400,{error:'Informe um e-mail válido e um prazo de 1 a 3650 dias.'});
+ const order='manual-'+Date.now()+'-'+randomBytes(12).toString('hex'),until=Date.now()+days*86400000;
+ await db.recordPurchase({order,email,status:'paid',until});
+ let emailSent=false;try{await deliver(email);await db.markPurchaseSent(order);emailSent=true}catch(e){console.error('Acesso manual salvo; envio pendente:',e.code||e.name)}
+ return json(res,201,{ok:true,emailSent,until});
+ }
+ if(route==='/api/admin/revoke-manual'&&req.method==='POST'){
+ const {order}=await body(req,1000);if(typeof order!=='string'||!/^manual-[0-9]+-[a-f0-9]{24}$/.test(order))return json(res,400,{error:'Selecione um acesso manual válido.'});
+ await db.revokeManual(order);return json(res,200,{ok:true});
+ }
  if(route==='/api/admin/resend'&&req.method==='POST'){
  if(!allowed('admin-resend:'+user.id,10))return json(res,429,{error:'Aguarde antes de reenviar mais acessos.'});
  const {email:raw}=await body(req,1000);const email=String(raw||'').trim().toLowerCase();

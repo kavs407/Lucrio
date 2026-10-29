@@ -116,6 +116,15 @@ test('Admin: confirmação do e-mail do proprietário, clientes bloqueados e dad
  const result=await req('/api/auth/register','POST',{...reg,token:ot});assert.equal(result.status,201);const oc=cookie(result);assert.equal((await result.json()).redirect,'/admin');assert.equal((await req('/admin','GET',null,oc)).status,200);assert.equal((await req('/api/workspace','GET',null,oc)).status,200);assert.equal(await d.hasAccess(owner),false);
  await d.recordPurchase({order:'client-paid',email:client,status:'paid',until:Date.now()+86400000});await d.saveActivation(tokenHash(ct),client,Date.now()+60000);
  const cr=await req('/api/auth/register','POST',{...reg,email:client,token:ct,admin:true,role:'admin'});assert.equal(cr.status,201);const cc=cookie(cr);assert.equal((await req('/admin','GET',null,cc)).status,403);assert.equal((await req('/api/admin/overview','GET',null,cc)).status,403);assert.equal((await req('/api/admin/resend','POST',{email:client},cc)).status,403);
+ assert.equal((await req('/api/admin/manual-access','POST',{email:'external@example.test',days:30},cc)).status,403);
+ assert.equal((await req('/api/admin/manual-access','POST',{email:'external@example.test',days:30},oc,'https://evil.test')).status,403);
+ assert.equal((await req('/api/admin/manual-access','POST',{email:'bad',days:30},oc)).status,400);
+ assert.equal((await req('/api/admin/manual-access','POST',{email:'external@example.test',days:0},oc)).status,400);
+ const manual=await req('/api/admin/manual-access','POST',{email:'external@example.test',days:30},oc);assert.equal(manual.status,201);assert.equal((await manual.json()).emailSent,true);assert.equal(await d.hasAccess('external@example.test'),true);assert.equal(await d.findUser('external@example.test'),null);
+ const manualOrder=(await d.adminOverview()).purchases.find(p=>p.email==='external@example.test').order_id;
+ assert.equal((await req('/api/admin/revoke-manual','POST',{order:'client-paid'},oc)).status,400);
+ assert.equal((await req('/api/admin/revoke-manual','POST',{order:manualOrder},cc)).status,403);
+ assert.equal((await req('/api/admin/revoke-manual','POST',{order:manualOrder},oc)).status,200);assert.equal(await d.hasAccess('external@example.test'),false);sent.length=0;
  const overview=await req('/api/admin/overview','GET',null,oc);assert.equal(overview.status,200);const data=await overview.json();assert.equal(Number(data.summary.users),2);assert.equal(Number(data.summary.active),1);assert(data.users.some(u=>u.email===client));assert(!JSON.stringify(data).includes('password'));assert(!JSON.stringify(data).includes('token_hash'));assert(!JSON.stringify(data).includes('SECRET'));
  assert.equal((await req('/api/admin/resend','POST',{email:'unknown@example.test'},oc)).status,409);assert.equal((await req('/api/admin/resend','POST',{email:client},oc,'https://evil.test')).status,403);
  assert.equal((await req('/api/admin/resend','POST',{email:client},oc)).status,200);assert.deepEqual(sent,[client]);const after=await d.adminOverview();assert.equal(Number(after.summary.pending),0);
