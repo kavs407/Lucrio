@@ -97,3 +97,9 @@ test('Envio Google por HTTPS: assinatura, destinatário fixo, repetição e falh
  await assert.rejects(()=>sendActivation(fakeDb,'buyer@example.test',config,async()=>({ok:true,json:async()=>({ok:false})})),e=>e.status===503);
  await assert.rejects(()=>sendActivation(fakeDb,'buyer@example.test',config,async()=>{throw Error('credential must not appear')}),e=>e.status===503&&!e.message.includes('credential'));
 });
+
+test('Teste de e-mail fica fechado sem credencial temporária e não concede acesso',async()=>{
+ const e=await PGlite.create();const d=createStore(adapt(e));await d.migrate();
+ const app=createApp(d,{NODE_ENV:'test'});app.listen(0,'127.0.0.1');await once(app,'listening');const host='http://127.0.0.1:'+app.address().port;
+ try{const r=await fetch(host+'/api/admin/mail-test',{method:'POST',headers:{Origin:host,'Content-Type':'application/json'},body:JSON.stringify({secret:'bad',to:'attacker@example.test'})});assert.equal(r.status,403);const rows=await e.query('SELECT count(*) AS n FROM lucrio.purchases');assert.equal(Number(rows.rows[0].n),0)}finally{await new Promise(resolve=>app.close(resolve));await d.close()}
+});

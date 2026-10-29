@@ -17,6 +17,7 @@ const secure=production||base?.startsWith('https://');
 const paidMode=production||config.REQUIRE_PURCHASE==='1';
 const deliver=config.sendActivation||((email)=>sendActivation(db,email,config));
 const limiter=new Map();
+let mailTestUsed=false;
 function allowed(key,limit=15){const now=Date.now();let entry=limiter.get(key);if(!entry||entry.reset<now)entry={n:0,reset:now+15*60*1000};entry.n++;limiter.set(key,entry);return entry.n<=limit}
 const cleanup=setInterval(()=>{for(const [k,v] of limiter)if(v.reset<Date.now())limiter.delete(k);db.cleanSessions(Date.now()).catch(e=>console.error('Falha na limpeza de sessões:',e.code||e.name));},60000);cleanup.unref();
 function json(res,status,data,extra={}){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store',...extra});res.end(JSON.stringify(data))}
@@ -51,6 +52,17 @@ const server=http.createServer(async(req,res)=>{
  const checkout=new URL(config.KIWIFY_CHECKOUT_URL);if(checkout.protocol!=='https:'||checkout.hostname!=='pay.kiwify.com.br')return json(res,503,{error:'Checkout indisponível.'});return redirect(res,checkout.href);
  }
  if(['POST','PUT','DELETE','PATCH'].includes(req.method)&&!originOK(req))return json(res,403,{error:'Origem inválida. Atualize a página e tente novamente.'});
+ if(route==='/api/admin/mail-test'&&req.method==='POST'){
+ const {secret}=await body(req,2000);
+ const expires=Number(config.MAIL_TEST_EXPIRES_AT||0);
+ if(!validSecret(secret,config.MAIL_TEST_SECRET)||!Number.isSafeInteger(expires)||Date.now()>expires||mailTestUsed)return json(res,403,{error:'Teste não autorizado ou expirado.'});
+ const recipient=config.MAIL_TEST_TO;
+ if(!recipient||!/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(recipient))return json(res,503,{error:'Destinatário de teste não configurado.'});
+ // The recipient is fixed in the service config. Test links are never persisted
+ // and cannot create accounts or establish a paid entitlement.
+ mailTestUsed=true;
+ try{await sendActivation({saveActivation:async()=>{}},recipient,config);return json(res,200,{ok:true,test:true,accountCreated:false})}catch(e){mailTestUsed=false;throw e}
+ }
  if(route==='/api/auth/activation'&&req.method==='POST'){
  const {token}=await body(req,10000);const email=typeof token==='string'&&/^[a-f0-9]{64}$/.test(token)?await db.getActivation(tokenHash(token)):null;
  if(!email||!await db.hasAccess(email))return json(res,403,{error:'Link inválido, expirado ou assinatura sem pagamento ativo.'});return json(res,200,{email});
