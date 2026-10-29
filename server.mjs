@@ -32,7 +32,7 @@ async function createSession(id){const token=randomBytes(32).toString('hex');awa
 const segments=['Alimentação','Artesanato','Impressão 3D','Serviços','Revenda'];
 function validWorkspace(d){if(!d?.settings||typeof d.settings.name!=='string'||!d.settings.name.trim()||d.settings.name.length>100||!Array.isArray(d.products)||d.products.length>2000)return false;for(const k of ['hour','fixed','hours','energy'])if(typeof d.settings[k]!=='number'||!Number.isFinite(d.settings[k])||d.settings[k]<0||d.settings[k]>1e12)return false;if(d.settings.hours<1)return false;const ids=new Set();for(const p of d.products){if(!p||typeof p.id!=='string'||p.id.length>100||ids.has(p.id)||typeof p.name!=='string'||!p.name.trim()||p.name.length>120||!segments.includes(p.segment)||!Array.isArray(p.materials)||p.materials.length>500)return false;ids.add(p.id);for(const k of ['yield','time','hour','pack','other','power','eqtime','gas','wear','loss','margin','tax','fee','fixedfee','discount'])if(typeof p[k]!=='number'||!Number.isFinite(p[k])||p[k]<0||p[k]>1e12)return false;if(p.yield<1||p.discount>100||p.margin+p.tax+p.fee>=100)return false;for(const m of p.materials)if(!m||typeof m.name!=='string'||m.name.length>300||!Number.isFinite(m.price)||m.price<0||!Number.isFinite(m.total)||m.total<=0||!Number.isFinite(m.used)||m.used<0)return false}return true}
 function redirect(res,to){res.writeHead(303,{Location:to,'Cache-Control':'no-store'});res.end()}
-const files={'/admin':'admin.html','/admin.css':'admin.css','/admin.js':'admin.js','/':'landing.html','/landing.css':'landing.css','/landing.js':'landing.js','/ativar':'activate.html','/activate.js':'activate.js','/obrigado':'thanks.html','/assinatura':'subscription.html','/login':'login.html','/cadastro':'login.html','/app':'app.html','/logo.png':'logo.png','/auth.js':'auth.js','/app.js':'app.js','/app.css':'app.css'};
+const files={'/recuperar-senha':'recover.html','/recover.js':'recover.js','/admin':'admin.html','/admin.css':'admin.css','/admin.js':'admin.js','/':'landing.html','/landing.css':'landing.css','/landing.js':'landing.js','/ativar':'activate.html','/activate.js':'activate.js','/obrigado':'thanks.html','/assinatura':'subscription.html','/login':'login.html','/cadastro':'login.html','/app':'app.html','/logo.png':'logo.png','/auth.js':'auth.js','/app.js':'app.js','/app.css':'app.css'};
 const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.png':'image/png'};
 const server=http.createServer(async(req,res)=>{
  res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','same-origin');res.setHeader('X-Frame-Options','DENY');res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
@@ -66,8 +66,27 @@ const server=http.createServer(async(req,res)=>{
  mailTestUsed=true;
  try{await sendActivation({saveActivation:async()=>{}},recipient,config);return json(res,200,{ok:true,test:true,accountCreated:false})}catch(e){mailTestUsed=false;throw e}
  }
+ if(route==='/api/auth/forgot-password'&&req.method==='POST'){
+ if(!allowed('reset-ip:'+req.socket.remoteAddress,10))return json(res,429,{error:'Aguarde 15 minutos antes de tentar novamente.'});
+ const {email:raw}=await body(req,1000);const email=String(raw||'').trim().toLowerCase();
+ if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254)return json(res,400,{error:'Informe um e-mail válido.'});
+ if(!allowed('reset-email:'+email,3))return json(res,200,{ok:true});
+ if(await db.findUser(email)){
+ const resetStore={saveActivation:(token,to)=>db.saveReset(token,to,Date.now()+30*60000)};
+ try{if(config.sendReset)await config.sendReset(email,resetStore);else await sendActivation(resetStore,email,config)}catch(e){console.error('Falha no envio da recuperação:',e.code||e.name)}
+ }
+ return json(res,200,{ok:true});
+ }
+ if(route==='/api/auth/reset-password'&&req.method==='POST'){
+ if(!allowed('reset-use:'+req.socket.remoteAddress,30))return json(res,429,{error:'Muitas tentativas. Aguarde 15 minutos.'});
+ const {token,password}=await body(req,2000);
+ if(typeof token!=='string'||!/^[a-f0-9]{64}$/.test(token)||typeof password!=='string'||password.length<10||password.length>128)return json(res,400,{error:'Use uma senha de 10 a 128 caracteres e um link válido.'});
+ const salt=randomBytes(16).toString('hex'),derived=Buffer.from(await kdf(password,salt,64)).toString('hex');
+ await db.resetPassword(tokenHash(token),salt+':'+derived);
+ return json(res,200,{ok:true},{'Set-Cookie':cookie('',0)});
+ }
  if(route==='/api/auth/activation'&&req.method==='POST'){
- const {token}=await body(req,10000);const email=typeof token==='string'&&/^[a-f0-9]{64}$/.test(token)?await db.getActivation(tokenHash(token)):null;
+ const {token}=await body(req,10000);if(typeof token==='string'&&/^[a-f0-9]{64}$/.test(token)){const resetEmail=await db.getReset(tokenHash(token));if(resetEmail)return json(res,200,{email:resetEmail,reset:true})}const email=typeof token==='string'&&/^[a-f0-9]{64}$/.test(token)?await db.getActivation(tokenHash(token)):null;
  if(!email||(!ownerEmail(email)&&!await db.hasAccess(email)))return json(res,403,{error:'Link inválido, expirado ou assinatura sem pagamento ativo.'});return json(res,200,{email});
  }
  if(route==='/api/auth/request-access'&&req.method==='POST'){
@@ -120,7 +139,7 @@ const server=http.createServer(async(req,res)=>{
  if(req.method!=='GET'&&req.method!=='HEAD')return json(res,405,{error:'Método não permitido.'});
  if(route==='/conta')return redirect(res,'/cadastro');
  if(route==='/app'&&!user)return redirect(res,'/login');
- if(['/login','/cadastro'].includes(route)&&entitled)return redirect(res,isAdmin?'/admin':'/app');
+ if(route==='/login'&&entitled)return redirect(res,isAdmin?'/admin':'/app');
  if(!files[route])return json(res,404,{error:'Página não encontrada.'});
  const file=files[route];res.writeHead(200,{'Content-Type':mime[path.extname(file)],'Cache-Control':file.endsWith('.html')?'no-store':'public, max-age=300'});res.end(req.method==='HEAD'?undefined:readFileSync(path.join(publicDir,file)));
  }catch(e){if(!res.headersSent)json(res,e.status||500,{error:e.status?e.message:'Não foi possível concluir a operação. Tente novamente.'});else res.end();if(!e.status)console.error('Falha na requisição:',e.code||e.name)}

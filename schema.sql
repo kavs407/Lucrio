@@ -41,3 +41,11 @@ CREATE TABLE IF NOT EXISTS lucrio.activations (
 );
 ALTER TABLE lucrio.purchases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE lucrio.activations ENABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS lucrio.password_resets (
+ token_hash text PRIMARY KEY,
+ user_id text NOT NULL REFERENCES lucrio.users(id) ON DELETE CASCADE,
+ expires_at bigint NOT NULL,
+ used_at bigint
+);
+ALTER TABLE lucrio.password_resets ENABLE ROW LEVEL SECURITY;

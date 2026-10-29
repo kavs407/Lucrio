@@ -123,3 +123,31 @@ test('Admin: confirmação do e-mail do proprietário, clientes bloqueados e dad
  await req('/api/auth/logout','POST',{},oc);assert.equal((await req('/api/admin/overview','GET',null,oc)).status,401);
  }finally{await new Promise(resolve=>app.close(resolve));await d.close()}
 });
+
+
+test('Recuperação: token separado, uso único, expiração e revogação de sessões',async()=>{
+ const {tokenHash}=await import('./billing.mjs');const e=await PGlite.create();const d=createStore(adapt(e));await d.migrate();
+ let token='c'.repeat(64),sent=0;
+ const app=createApp(d,{NODE_ENV:'test',sendReset:async(email,store)=>{sent++;await store.saveActivation(tokenHash(token),email)}});
+ app.listen(0,'127.0.0.1');await once(app,'listening');const host='http://127.0.0.1:'+app.address().port;
+ const call=(route,data,cookie,origin=host)=>fetch(host+route,{method:data?'POST':'GET',redirect:'manual',headers:{Origin:origin,...(data?{'Content-Type':'application/json'}:{}),...(cookie?{Cookie:cookie}:{})},body:data?JSON.stringify(data):undefined});
+ try{
+ let r=await call('/api/auth/register',{email:'reset@example.test',password:'senha-original-123',business:'Negócio'});assert.equal(r.status,201);const old=cookie(r);
+ assert.equal((await call('/recuperar-senha')).status,200);
+ assert.equal((await call('/cadastro',null,old)).status,200);
+ assert.equal((await call('/api/auth/forgot-password',{email:'reset@example.test'},null,'https://other.test')).status,403);
+ assert.deepEqual(await (await call('/api/auth/forgot-password',{email:'unknown@example.test'})).json(),{ok:true});assert.equal(sent,0);
+ assert.deepEqual(await (await call('/api/auth/forgot-password',{email:'reset@example.test'})).json(),{ok:true});assert.equal(sent,1);
+ assert.equal(await d.getActivation(tokenHash(token)),undefined);
+ r=await call('/api/auth/activation',{token});assert.equal((await r.json()).reset,true);
+ assert.equal((await call('/api/auth/reset-password',{token:'d'.repeat(64),password:'senha-nova-123'})).status,403);
+ assert.equal((await call('/api/auth/reset-password',{token,password:'curta'})).status,400);
+ assert.equal((await call('/api/auth/reset-password',{token,password:'senha-nova-123'})).status,200);
+ assert.equal((await call('/api/workspace',null,old)).status,401);
+ assert.equal((await call('/api/auth/login',{email:'reset@example.test',password:'senha-original-123'})).status,401);
+ assert.equal((await call('/api/auth/login',{email:'reset@example.test',password:'senha-nova-123'})).status,200);
+ assert.equal((await call('/api/auth/reset-password',{token,password:'outra-senha-123'})).status,403);
+ token='e'.repeat(64);await d.saveReset(tokenHash(token),'reset@example.test',Date.now()-1);
+ assert.equal((await call('/api/auth/reset-password',{token,password:'outra-senha-123'})).status,403);
+ }finally{await new Promise(resolve=>app.close(resolve));await d.close()}
+});
