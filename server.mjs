@@ -1,5 +1,5 @@
 import http from 'node:http';
-import {validSecret,purchaseEvent,sendActivation,tokenHash} from './billing.mjs';
+import {validSecret,purchaseEvent,sendActivation,tokenHash,checkoutConfigured} from './billing.mjs';
 import {connectDatabase,createStore} from './database.mjs';
 import { randomBytes,scrypt,timingSafeEqual,createHash } from 'node:crypto';
 import { promisify } from 'node:util';
@@ -45,9 +45,9 @@ const server=http.createServer(async(req,res)=>{
  if(saved?.status==='paid'&&!saved.email_sent){await deliver(event.email);await db.markPurchaseSent(event.order)}
  return json(res,200,{ok:true});
  }
- if(route==='/api/public-config'&&req.method==='GET')return json(res,200,{price:'R$ 19,90',checkoutReady:!!(config.KIWIFY_CHECKOUT_URL&&config.KIWIFY_PRODUCT_ID&&config.KIWIFY_WEBHOOK_TOKEN&&config.RESEND_API_KEY&&config.MAIL_FROM)});
+ if(route==='/api/public-config'&&req.method==='GET')return json(res,200,{price:'R$ 19,90',checkoutReady:checkoutConfigured(config)});
  if(route==='/comprar'&&req.method==='GET'){
- if(!(config.KIWIFY_CHECKOUT_URL&&config.KIWIFY_PRODUCT_ID&&config.KIWIFY_WEBHOOK_TOKEN&&config.RESEND_API_KEY&&config.MAIL_FROM))return redirect(res,'/assinatura?status=preparando');
+ if(!checkoutConfigured(config))return redirect(res,'/assinatura?status=preparando');
  const checkout=new URL(config.KIWIFY_CHECKOUT_URL);if(checkout.protocol!=='https:'||checkout.hostname!=='pay.kiwify.com.br')return json(res,503,{error:'Checkout indisponível.'});return redirect(res,checkout.href);
  }
  if(['POST','PUT','DELETE','PATCH'].includes(req.method)&&!originOK(req))return json(res,403,{error:'Origem inválida. Atualize a página e tente novamente.'});

@@ -30,3 +30,9 @@ A página de vendas está em `/`. Preço escolhido: R$ 19,90 por mês. Em produ�
 `npm test` verifica isolamento e persistência, cadastro com e-mail diferente, token inválido e reutilizado, webhook sem segredo, produto incorreto, repetição de evento, expiração, revogação de acesso em sessão aberta e aprovação atrasada após reembolso. Os testes usam PostgreSQL embarcado e remetente simulado, sem enviar e-mails ou movimentar dinheiro.
 
 **Integração externa pendente:** Kiwify e Resend não foram configurados nem testados ponta a ponta. A página exibe "Em breve" até a configuração completa. A presença das variáveis não substitui o teste real.
+
+## Alternativa configurada para Gmail (sem SMTP)
+
+O backend também oferece `EMAIL_TRANSPORT=google-apps-script`. Consulte `integrations/google-mail/README.md` para ativar o projeto na conta Google do proprietário. Este caminho não exige domínio de e-mail próprio ou senha de app. O remetente é a conta que autoriza a implantação Google.
+
+**Abertura das vendas agora é explícita:** além de produto, token e transporte configurado, `CHECKOUT_ENABLED=1` é necessário. Mantenha `0` até a confirmação do envio e o teste completo da Kiwify. As instruções antigas sobre ativação só pela presença das variáveis foram substituídas por este requisito.

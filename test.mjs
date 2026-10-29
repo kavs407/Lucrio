@@ -71,3 +71,29 @@ test('Assinatura: webhook autenticado, e-mail confirmado, expiração e reembols
  const rows=await e.query("SELECT relrowsecurity FROM pg_class JOIN pg_namespace n ON n.oid=relnamespace WHERE n.nspname='lucrio' AND relname IN ('purchases','activations')");assert(rows.rows.every(r=>r.relrowsecurity));
  }finally{await new Promise(resolve=>app.close(resolve));await d.close()}
 });
+
+test('Envio Google por HTTPS: assinatura, destinatário fixo, repetição e falhas',async()=>{
+ const {runInNewContext}=await import('node:vm');
+ const {createHmac}=await import('node:crypto');
+ const {sendActivation,emailConfigured,checkoutConfigured}=await import('./billing.mjs');
+ const source=await readFile('integrations/google-mail/Code.gs','utf8');
+ const relaySecret='c'.repeat(64),cache=new Map(),outbox=[];
+ let quota=100;
+ const scope={Date,JSON,Number,PropertiesService:{getScriptProperties:()=>({getProperty:()=>relaySecret})},Utilities:{Charset:{UTF_8:'utf8'},computeHmacSha256Signature:(s,k)=>Array.from(createHmac('sha256',k).update(s).digest())},ContentService:{MimeType:{JSON:'application/json'},createTextOutput:s=>({setMimeType:()=>JSON.parse(s)})},MailApp:{getRemainingDailyQuota:()=>quota,sendEmail:m=>outbox.push(m)},LockService:{getScriptLock:()=>({tryLock:()=>true,hasLock:()=>true,releaseLock(){}})},CacheService:{getScriptCache:()=>({get:k=>cache.get(k),put:(k,v)=>cache.set(k,v)})}};
+ runInNewContext(source,scope);
+ const config={EMAIL_TRANSPORT:'google-apps-script',GMAIL_RELAY_URL:'https://script.google.com/macros/s/test-only/exec',GMAIL_RELAY_SECRET:relaySecret,RENDER_EXTERNAL_URL:'https://uselucrio.onrender.com'};
+ let savedHash,envelope;
+ const fakeDb={saveActivation:async hash=>{savedHash=hash}};
+ const transport=async(url,options)=>{assert.equal(url,config.GMAIL_RELAY_URL);assert.equal(options.method,'POST');assert(!options.body.includes(relaySecret));envelope=JSON.parse(options.body);const data=scope.doPost({postData:{contents:options.body}});return {ok:true,json:async()=>data}};
+ assert.equal(emailConfigured(config),true);assert.equal(emailConfigured({...config,GMAIL_RELAY_URL:'https://evil.test/exec'}),false);
+ assert.equal(checkoutConfigured({...config,KIWIFY_CHECKOUT_URL:'url',KIWIFY_PRODUCT_ID:'id',KIWIFY_WEBHOOK_TOKEN:'a'.repeat(64)}),false);
+ await sendActivation(fakeDb,'buyer@example.test',config,transport);
+ assert.equal(outbox.length,1);assert.equal(outbox[0].to,'buyer@example.test');assert.match(outbox[0].body,/https:\/\/uselucrio.onrender.com\/cadastro#token=[a-f0-9]{64}/);assert.equal(JSON.parse(envelope.payload).id,savedHash);
+ assert.equal(scope.doPost({postData:{contents:JSON.stringify(envelope)}}).ok,true);assert.equal(outbox.length,1);
+ const changed={...envelope,payload:envelope.payload.replace('buyer@example.test','thief@example.test')};assert.equal(scope.doPost({postData:{contents:JSON.stringify(changed)}}).ok,false);
+ const signed=d=>{const payload=JSON.stringify(d);return {payload,signature:createHmac('sha256',relaySecret).update(payload).digest('hex')}};
+ for(const changes of [{issued_at:Date.now()-600001},{link:'https://evil.test/cadastro#token='+ 'd'.repeat(64)},{to:'one@example.test,two@example.test'}]){const data={...JSON.parse(envelope.payload),...changes};assert.equal(scope.doPost({postData:{contents:JSON.stringify(signed(data))}}).ok,false)}
+ assert.equal(outbox.length,1);quota=0;const data={...JSON.parse(envelope.payload),id:'e'.repeat(64)};assert.equal(scope.doPost({postData:{contents:JSON.stringify(signed(data))}}).ok,false);
+ await assert.rejects(()=>sendActivation(fakeDb,'buyer@example.test',config,async()=>({ok:true,json:async()=>({ok:false})})),e=>e.status===503);
+ await assert.rejects(()=>sendActivation(fakeDb,'buyer@example.test',config,async()=>{throw Error('credential must not appear')}),e=>e.status===503&&!e.message.includes('credential'));
+});
