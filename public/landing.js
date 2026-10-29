@@ -1,0 +1,5 @@
+const cost=document.querySelector('#cost'),margin=document.querySelector('#margin');
+const money=n=>n.toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+function update(){const c=Number(cost.value),m=Number(margin.value);document.querySelector('#margin-label').textContent=m+'%';const valid=cost.validity.valid&&c>0;document.querySelector('#calc-price').textContent=valid?money(c/(1-m/100)):'—';document.querySelector('#calc-profit').textContent=valid?money(c/(1-m/100)-c):'—'}
+cost.addEventListener('input',update);margin.addEventListener('input',update);document.querySelector('#quick-calc').onsubmit=e=>e.preventDefault();update();
+fetch('/api/public-config').then(r=>r.json()).then(d=>{if(!d.checkoutReady){document.querySelector('#buy').textContent='Em breve · R$ 19,90/mês';document.querySelector('#buy').href='/assinatura?status=preparando';document.querySelector('#checkout-note').textContent='Estamos finalizando o checkout. As vendas ainda não estão abertas.'}}).catch(()=>{document.querySelector('#checkout-note').textContent='Confira a disponibilidade do checkout ao continuar.'});

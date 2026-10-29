@@ -23,3 +23,21 @@ ALTER TABLE lucrio.sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE lucrio.workspaces ENABLE ROW LEVEL SECURITY;
 -- Acesso somente pelo backend via conexão PostgreSQL privada.
 -- Não criamos políticas para anon/authenticated nem expomos hashes pela API.
+
+ALTER TABLE lucrio.users ADD COLUMN IF NOT EXISTS verified_at bigint;
+CREATE TABLE IF NOT EXISTS lucrio.purchases (
+ order_id text PRIMARY KEY,
+ email text NOT NULL,
+ status text NOT NULL CHECK(status IN ('paid','revoked')),
+ access_until bigint NOT NULL,
+ email_sent boolean NOT NULL DEFAULT false
+);
+CREATE INDEX IF NOT EXISTS lucrio_purchase_email ON lucrio.purchases(email,access_until);
+CREATE TABLE IF NOT EXISTS lucrio.activations (
+ token_hash text PRIMARY KEY,
+ email text NOT NULL,
+ expires_at bigint NOT NULL,
+ used_at bigint
+);
+ALTER TABLE lucrio.purchases ENABLE ROW LEVEL SECURITY;
+ALTER TABLE lucrio.activations ENABLE ROW LEVEL SECURITY;

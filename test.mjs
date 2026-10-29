@@ -35,3 +35,39 @@ r=await request('/api/auth/login','POST',{email:'alice@example.test',password:'s
 const js=await readFile('public/app.js','utf8'),source=js.slice(js.indexOf('function calc('),js.indexOf('\nfunction goto'));const calc=new Function('db',source+';return calc')({settings:{energy:1,fixed:160,hours:160}});assert.equal(calc(product).unit,3.7);assert(Math.abs(calc(product).margin-30)<1e-8);
 const production=createApp(db,{NODE_ENV:'production',RENDER_EXTERNAL_URL:'https://example.onrender.com'});production.close();
 }finally{await stop();await rm(dir,{recursive:true,force:true})}});
+
+test('Assinatura: webhook autenticado, e-mail confirmado, expiração e reembolso',async()=>{
+ const {purchaseEvent,tokenHash}=await import('./billing.mjs');
+ const e=await PGlite.create();const d=createStore(adapt(e));await d.migrate();
+ const secret='a'.repeat(64),token='b'.repeat(64),buyer='pessoa@example.test';let mailCount=0;
+ const paid={order_id:'order1',webhook_event_type:'order_approved',order_status:'paid',Product:{product_id:'lucrio'},Customer:{email:buyer},Subscription:{plan:{frequency:'monthly'},next_payment:new Date(Date.now()+30*86400000).toISOString()}};
+ const app=createApp(d,{NODE_ENV:'test',REQUIRE_PURCHASE:'1',KIWIFY_WEBHOOK_TOKEN:secret,KIWIFY_PRODUCT_ID:'lucrio',sendActivation:async email=>{mailCount++;assert.equal(email,buyer);await d.saveActivation(tokenHash(token),email,Date.now()+3600000)}});
+ app.listen(0,'127.0.0.1');await once(app,'listening');const host='http://127.0.0.1:'+app.address().port;
+ const req=(route,method='GET',data,c)=>fetch(host+route,{method,redirect:'manual',headers:{Origin:host,...(data?{'Content-Type':'application/json'}:{}),...(c?{Cookie:c}:{})},body:data?JSON.stringify(data):undefined});
+ const registration={email:buyer,password:'teste-bem-seguro',business:'Teste',token};
+ try{
+ assert.equal((await req('/')).status,200);assert.equal((await req('/comprar')).headers.get('location'),'/assinatura?status=preparando');
+ assert.equal((await req('/api/auth/register','POST',registration)).status,403);
+ assert.equal((await req('/api/billing/kiwify','POST',paid)).status,401);
+ assert.equal((await req('/api/billing/kiwify?token='+secret,'POST',{...paid,Product:{product_id:'outro'}})).status,200);assert.equal(await d.hasAccess(buyer),false);
+ // Real provider calls do not carry a browser Origin header.
+ const webhook=()=>fetch(host+'/api/billing/kiwify?token='+secret,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(paid)});
+ assert.equal((await webhook()).status,200);assert.equal(await d.hasAccess(buyer),true);assert.equal(mailCount,1);
+ assert.equal((await webhook()).status,200);assert.equal(mailCount,1);
+ assert.equal((await req('/api/auth/register','POST',{...registration,email:'intruso@example.test'})).status,403);
+ const r=await req('/api/auth/register','POST',registration);assert.equal(r.status,201);const c=cookie(r);
+ assert.equal(await d.getActivation(tokenHash(token)),undefined);assert.equal((await req('/api/workspace','GET',null,c)).status,200);
+ assert.equal((await req('/api/auth/register','POST',registration)).status,403);
+ assert.equal((await req('/api/auth/login','POST',registration)).status,200);
+ const revoked={...paid,webhook_event_type:'order_refunded'};
+ assert.equal((await req('/api/billing/kiwify?token='+secret,'POST',revoked)).status,200);
+ assert.equal((await req('/api/workspace','GET',null,c)).status,403);assert.equal((await req('/app','GET',null,c)).headers.get('location'),'/assinatura');
+ assert.equal((await req('/api/auth/login','POST',registration)).status,403);
+ await webhook();assert.equal(await d.hasAccess(buyer),false); // A delayed approval cannot undo a refund.
+ await d.recordPurchase({order:'expired',email:buyer,status:'paid',until:Date.now()-1});assert.equal(await d.hasAccess(buyer),false);
+ assert.throws(()=>purchaseEvent({...paid,Subscription:{plan:{frequency:'monthly'},next_payment:'bad'}},'lucrio'),/Período/);
+ const a=await req('/api/auth/activation','POST',{token});assert.equal(a.status,403);
+ assert.equal((await req('/api/auth/request-access','POST',{email:'nobody@example.test'})).status,200);assert.equal(mailCount,1);
+ const rows=await e.query("SELECT relrowsecurity FROM pg_class JOIN pg_namespace n ON n.oid=relnamespace WHERE n.nspname='lucrio' AND relname IN ('purchases','activations')");assert(rows.rows.every(r=>r.relrowsecurity));
+ }finally{await new Promise(resolve=>app.close(resolve));await d.close()}
+});
